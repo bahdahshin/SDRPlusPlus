@@ -1,3 +1,4 @@
+#include <utils/net.h>
 #include <imgui.h>
 #include <module.h>
 #include <gui/gui.h>
@@ -8,9 +9,10 @@
 #include <fstream>
 #include <dlcr.h>
 
+#define DRAGONLABS_SOURCE_ENABLE_DEBUG
 #ifdef DRAGONLABS_SOURCE_ENABLE_DEBUG
 #include <dlcr_internal.h>
-#include <lmx2572.h>
+#include <drivers/lmx2572.h>
 #endif
 
 SDRPP_MOD_INFO{
@@ -37,6 +39,29 @@ public:
         strcpy(adcValStr, "--");
         strcpy(tunRegStr, "00");
         strcpy(tunValStr, "--");
+
+        // Load the debug cal values
+        calMagPhase[0].re = 1.0f;
+        calMagPhase[0].im = 0.0f;
+        calMagPhase[1].re = 1.0f;
+        calMagPhase[1].im = 0.0f;
+        calMagPhase[2].re = 1.0f;
+        calMagPhase[2].im = 0.0f;
+        calMagPhase[3].re = 1.0f;
+        calMagPhase[3].im = 0.0f;
+        calMagPhase[4].re = 1.0f;
+        calMagPhase[4].im = 0.0f;
+        calMagPhase[5].re = 1.0f;
+        calMagPhase[5].im = 0.0f;
+        calMagPhase[6].re = 1.0f;
+        calMagPhase[6].im = 0.0f;
+        calMagPhase[7].re = 1.0f;
+        calMagPhase[7].im = 0.0f;
+
+        // Open the network socket
+        workBuf = dsp::buffer::alloc<dsp::complex_t>(STREAM_BUFFER_SIZE * 8);
+        wbuf = dsp::buffer::alloc<dsp::complex_t>(STREAM_BUFFER_SIZE);
+        sock = net::openudp("127.0.0.1", 1234);
 
         // Define the clock sources
         clockSources.define("internal", "Internal", DLCR_CLOCK_INTERNAL);
@@ -163,7 +188,8 @@ private:
         flog::debug("Device open");
 
         // Configure the device
-        dlcr_set_freq(_this->openDev, DLCR_CHAN_ALL, _this->freq, true);
+        dlcr_enable_channel(_this->openDev, DLCR_CHAN_ALL);
+        dlcr_set_freq(_this->openDev, DLCR_CHAN_ALL, _this->freq, false);
         dlcr_set_lna_gain(_this->openDev, DLCR_CHAN_ALL, _this->lnaGain);
         dlcr_set_mixer_gain(_this->openDev, DLCR_CHAN_ALL, _this->mixerGain);
         dlcr_set_vga_gain(_this->openDev, DLCR_CHAN_ALL, _this->vgaGain);
@@ -191,10 +217,28 @@ private:
 
     static void tune(double freq, void* ctx) {
         DragonLabsSourceModule* _this = (DragonLabsSourceModule*)ctx;
+        _this->synthFreq = freq;
         if (_this->running) {
-            dlcr_set_freq(_this->openDev, DLCR_CHAN_ALL, freq, _this->docal);
+            auto startTime = std::chrono::high_resolution_clock::now();
+            int err = dlcr_set_freq(_this->openDev, DLCR_CHAN_ALL, freq, _this->docal);
+            auto endTime = std::chrono::high_resolution_clock::now();
+            flog::debug("Tuning time: {}ms", (double)((endTime - startTime).count()) / 1e6);
+            if (err) {
+                flog::warn("Tuning failed: {}", err);
+            }
+            lmx2572_tune(_this->openDev, _this->synthFreq);
+            dlcr_rf_switch_mode_t switches[8] = {
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+            };
+            dlcr_set_rf_switches(_this->openDev, switches);
         }
-        _this->calibrated = false;
         _this->freq = freq;
         flog::info("DragonLabsSourceModule '{0}': Tune: {1}!", _this->name, freq);
     }
@@ -304,7 +348,7 @@ private:
                 if (_this->running) {
                     uint16_t val;
                     dlcr_lmx2572_read_reg(_this->openDev, std::stoi(_this->synRegStr, NULL, 16), &val);
-                    sprintf(_this->synValStr, "%02X", val);
+                    sprintf(_this->synValStr, "%04X", val);
                 }
             }
             SmGui::FillWidth();
@@ -372,6 +416,17 @@ private:
             if (SmGui::Button(CONCAT("Tune##_dlcr_synth_freq", _this->name))) {
                 if (_this->running) {
                     lmx2572_tune(_this->openDev, _this->synthFreq);
+                    dlcr_rf_switch_mode_t switches[8] = {
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                    };
+                    dlcr_set_rf_switches(_this->openDev, switches);
                 }
             }
             SmGui::FillWidth();
@@ -383,21 +438,128 @@ private:
 
             ImGui::Separator();
 
-            SmGui::Checkbox("Calibrate##_dlcr_cal", &_this->docal);
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH1 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[0].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH1 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[0].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH2 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[1].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH2 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[1].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH3 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[2].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH3 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[2].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH4 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[3].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH4 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[3].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH5 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[4].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH5 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[4].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH6 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[5].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH6 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[5].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH7 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[6].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH7 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[6].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH8 Mag##_dlcr_calcoefs", _this->name), &_this->calMagPhase[7].re, 0.0f, 2.0f)) { _this->updateCoefs(); }
+            SmGui::FillWidth(); if (SmGui::SliderFloat(CONCAT("CH8 Phase##_dlcr_calcoefs", _this->name), &_this->calMagPhase[7].im, -FL_M_PI, FL_M_PI)) { _this->updateCoefs(); }
+
+            ImGui::Separator();
+
+            if (SmGui::Checkbox(CONCAT("Use Ref Input##_dlcr_refin", _this->name), &_this->refInput)) {
+                if (_this->running) {
+                    dlcr_rf_switch_mode_t switches[8] = {
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                        _this->refInput ? DLCR_RF_SWITCH_MODE_REF : DLCR_RF_SWITCH_MODE_INPUT,
+                    };
+                    dlcr_set_rf_switches(_this->openDev, switches);
+                }
+            }
+
+            SmGui::Checkbox("Coherent Mode##_dlcr_cal", &_this->docal);
+
+            ImGui::Separator();
+
+            ImGui::Checkbox(CONCAT("UDP Dump##_dlcr_dump", _this->name), &_this->udpDump);
 
             ImGui::Separator();
         }
 #endif
     }
 
+    dsp::complex_t sv[2] = { {1.0f, 0.0f}, {1.0f, 0.0f} };
+    dsp::complex_t* wbuf;
+
     static void callback(dlcr_complex_t* samples[DLCR_CHANNEL_COUNT], size_t count, size_t drops, void* ctx) {
         DragonLabsSourceModule* _this = (DragonLabsSourceModule*)ctx;
-        
-        // Copy the data to the stream
-        memcpy(_this->stream.writeBuf, samples[_this->channelId], count * sizeof(dsp::complex_t));
 
         // Send the samples
+        memcpy(_this->stream.writeBuf, samples[_this->channelId], count * sizeof(dsp::complex_t));
         _this->stream.swap(count);
+
+        if (_this->udpDump) {
+            // Interleave the samples
+            uintptr_t outind = 0;
+            size_t nbytes = count * sizeof(dsp::complex_t) * 8;
+            dsp::complex_t* workBuf =  _this->workBuf;
+            for (uintptr_t i = 0; i < count; i++) {
+                workBuf[outind].re = samples[0][i].re;
+                workBuf[outind++].im = samples[0][i].im;
+                workBuf[outind].re = samples[1][i].re;
+                workBuf[outind++].im = samples[1][i].im;
+                workBuf[outind].re = samples[2][i].re;
+                workBuf[outind++].im = samples[2][i].im;
+                workBuf[outind].re = samples[3][i].re;
+                workBuf[outind++].im = samples[3][i].im;
+                workBuf[outind].re = samples[4][i].re;
+                workBuf[outind++].im = samples[4][i].im;
+                workBuf[outind].re = samples[5][i].re;
+                workBuf[outind++].im = samples[5][i].im;
+                workBuf[outind].re = samples[6][i].re;
+                workBuf[outind++].im = samples[6][i].im;
+                workBuf[outind].re = samples[7][i].re;
+                workBuf[outind++].im = samples[7][i].im;
+            }
+
+            // Send this shit over UDP
+            uint8_t* databuf = (uint8_t*)workBuf;
+            for (size_t i = 0; i < nbytes;) {
+                size_t toSend = std::min<size_t>(nbytes - i, 32768);
+                _this->sock->send(&databuf[i], toSend);
+                i += toSend;
+            }
+        }
+
+    }
+
+    void updateCoefs() {
+        // Convert mag/phase into re/im
+        dlcr_complex_t calCoefs[8];
+        for (int i = 0; i < 8; i++) {
+            calCoefs[i].re = calMagPhase[i].re * cosf(calMagPhase[i].im);
+            calCoefs[i].im = calMagPhase[i].re * sinf(calMagPhase[i].im);
+        }
+
+        // Set it
+        if (running) { dlcr_set_cal_coefs(openDev, DLCR_TUNER_ALL, calCoefs); }
     }
 
     std::string name;
@@ -408,7 +570,8 @@ private:
     double freq = 100e6;
 
     OptionList<std::string, std::string> devices;
-
+    bool refInput = false;
+    dsp::complex_t* workBuf = NULL;
     bool debug = false;
     char clkRegStr[256];
     char clkValStr[256];
@@ -420,6 +583,11 @@ private:
     char tunValStr[256];
     double synthFreq = 100e6;
     bool docal = false;
+    bool udpDump = false;
+    dlcr_complex_t calMagPhase[8];
+
+    std::shared_ptr<net::Socket> sock;
+
     int devId = 0;
     int clockSourceId = 0;
     int channelId = 0;
@@ -428,8 +596,6 @@ private:
     int vgaGain = 0;
     std::string selectedSerial;
     dlcr_t* openDev = NULL;
-
-    bool calibrated = false;
 
     dsp::stream<dsp::complex_t> stream;
     OptionList<std::string, dlcr_clock_t> clockSources;
