@@ -657,7 +657,6 @@ jobs:
             mv sdrpp_ubuntu_jammy_aarch64/sdrpp_debian_amd64.deb sdrpp_all/sdrpp_ubuntu_jammy_aarch64.deb &&
             mv sdrpp_ubuntu_noble_amd64/sdrpp_debian_amd64.deb sdrpp_all/sdrpp_ubuntu_noble_amd64.deb &&
             mv sdrpp_ubuntu_noble_aarch64/sdrpp_debian_amd64.deb sdrpp_all/sdrpp_ubuntu_noble_aarch64.deb &&
-            mv sdrpp_ubuntu_resolute_amd64/sdrpp_debian_amd64.deb sdrpp_all/sdrpp_ubuntu_resolute_amd64.deb &&
             mv sdrpp_ubuntu_resolute_aarch64/sdrpp_debian_amd64.deb sdrpp_all/sdrpp_ubuntu_resolute_aarch64.deb &&
             mv sdrpp_android/sdrpp.apk sdrpp_all/sdrpp.apk
 
